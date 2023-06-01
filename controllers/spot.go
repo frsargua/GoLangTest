@@ -91,28 +91,23 @@ fmt.Println(isCircle)
 			SELECT *
 			FROM public."MY_TABLE"
 			WHERE ST_Intersects(
-				ST_Transform(coordinates::geometry, 32630),
 				ST_MakeEnvelope(
 					%f, %f,
 					%f, %f,
-					32630
-				)
+					4326
+				),
+				coordinates::geometry
 			)
 			ORDER BY
-				CASE
-					WHEN ST_Distance(
-						ST_Transform(coordinates::geometry, 32630),
-						ST_Transform(ST_SetSRID(ST_MakePoint(%f, %f), 4326), 32630)
-					) < 50 THEN rating
-					ELSE NULL
-				END,
-				ST_Distance(
-					ST_Transform(coordinates::geometry, 32630),
-					ST_Transform(ST_SetSRID(ST_MakePoint(%f, %f), 4326), 32630)
-				);
+		  CASE
+			WHEN ST_Distance(coordinates::geography, ST_SetSRID(ST_MakePoint(%f, %f), 4326)) < 50 THEN rating
+			ELSE NULL
+		  END,
+		  ST_Distance(coordinates::geography, ST_SetSRID(ST_MakePoint(%f, %f), 4326));
 			`, latitude, longitude, latitude - radius, longitude - radius, latitude, longitude, latitude, longitude)
 	
 	}
+
 
 
 	err := models.DB.Limit(10).Raw(query).Scan(&spots).Error
