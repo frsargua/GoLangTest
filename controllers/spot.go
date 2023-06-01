@@ -49,9 +49,10 @@ func GetSpots(w http.ResponseWriter, r *http.Request){
 		return
 	}
 
-	// var results []models.Spot
-	
-	rows, err := getSpotsInArea(latitude,longitude,radius,isCircle);
+lat, nil := strconv.ParseFloat(latitude,64)
+lon, nil := strconv.ParseFloat(longitude,64)
+rad := float64(radius)
+	rows, err := getSpotsInArea(lat,lon,rad,isCircle);
   
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusBadRequest)
@@ -67,33 +68,60 @@ func GetSpots(w http.ResponseWriter, r *http.Request){
 	return match
 }
 
-func getSpotsInArea(latitude string, longitude string, radius int, isCircle bool) ([]models.Spot, error) {
+func getSpotsInArea(latitude float64, longitude float64, radius float64, isCircle bool) ([]models.Spot, error) {
 	var spots []models.Spot
-	var query string
+	query := ""
+
+fmt.Println(isCircle)
+
 	if(isCircle){
-		query = fmt.Sprintf(`SELECT *
+		query = fmt.Sprintf(`
+		SELECT *
 		FROM public."MY_TABLE"
-		WHERE ST_DWithin(coordinates::geography, ST_SetSRID(ST_MakePoint(%s, %s), 4326), %d)
+		WHERE ST_DWithin(coordinates::geography, ST_SetSRID(ST_MakePoint(%f, %f), 4326), %f)
 		ORDER BY
 		  CASE
-			WHEN ST_Distance(coordinates::geography, ST_SetSRID(ST_MakePoint(%s, %s), 4326)) < 50 THEN rating
+			WHEN ST_Distance(coordinates::geography, ST_SetSRID(ST_MakePoint(%f, %f), 4326)) < 50 THEN rating
 			ELSE NULL
 		  END,
-		  ST_Distance(coordinates::geography, ST_SetSRID(ST_MakePoint(%s,%s), 4326));
-		`,latitude,longitude,radius,latitude,longitude,latitude,longitude)
+		  ST_Distance(coordinates::geography, ST_SetSRID(ST_MakePoint(%f, %f), 4326));
+	`, latitude, longitude, radius, latitude, longitude, latitude, longitude)
 		}else{
-		query = fmt.Sprintf(`SELECT * FROM public."MY_TABLE" LIMIT 10`)
+			query = fmt.Sprintf(`
+			SELECT *
+			FROM public."MY_TABLE"
+			WHERE ST_Intersects(
+				ST_Transform(coordinates::geometry, 32630),
+				ST_MakeEnvelope(
+					%f, %f,
+					%f, %f,
+					32630
+				)
+			)
+			ORDER BY
+				CASE
+					WHEN ST_Distance(
+						ST_Transform(coordinates::geometry, 32630),
+						ST_Transform(ST_SetSRID(ST_MakePoint(%f, %f), 4326), 32630)
+					) < 50 THEN rating
+					ELSE NULL
+				END,
+				ST_Distance(
+					ST_Transform(coordinates::geometry, 32630),
+					ST_Transform(ST_SetSRID(ST_MakePoint(%f, %f), 4326), 32630)
+				);
+			`, latitude, longitude, latitude - radius, longitude - radius, latitude, longitude, latitude, longitude)
+	
 	}
 
 
 	err := models.DB.Limit(10).Raw(query).Scan(&spots).Error
-
-	fmt.Println(latitude , longitude , radius, isCircle)
-
+	
 	if err != nil {
-		err := errors.New("Error retrieving data")
+		err = errors.New("Error retrieving data")
 		return spots, err
 	}
+	
 
 
 	return spots, nil
