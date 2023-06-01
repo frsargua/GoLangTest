@@ -15,9 +15,11 @@ func main() {
   handler := controllers.New() 
 
   server := &http.Server{
-		Addr:    "0.0.0.0:8008",
+		Addr:    "0.0.0.0:8000",
 		Handler: handler,
   }
+
+
 
   models.ConnectDatabase()
 

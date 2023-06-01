@@ -3,6 +3,7 @@ package controllers
 import (
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http"
 	"regexp"
 	"strconv"
@@ -40,7 +41,6 @@ func GetSpots(w http.ResponseWriter, r *http.Request){
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
-
 	// Verify isCircle is a boolean
 	isCircle, err := strconv.ParseBool(isCircleStr)
 	if err != nil {
@@ -49,11 +49,16 @@ func GetSpots(w http.ResponseWriter, r *http.Request){
 		return
 	}
 
-	var results []models.Spot
+	// var results []models.Spot
 	
-	results = getSpotsInArea(latitude,longitude,radius,isCircle);
+	rows, err := getSpotsInArea(latitude,longitude,radius,isCircle);
   
-	json.NewEncoder(w).Encode(results)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+
+	json.NewEncoder(w).Encode(rows)
   }
 
   func isValidCoordinate(coordinate string) bool {
@@ -62,8 +67,34 @@ func GetSpots(w http.ResponseWriter, r *http.Request){
 	return match
 }
 
-func getSpotsInArea(latitude string, longitude string, radiusStr int, isCircleStr bool) []models.Spot {
+func getSpotsInArea(latitude string, longitude string, radius int, isCircle bool) ([]models.Spot, error) {
 	var spots []models.Spot
-	models.DB.Limit(10).Find(&spots)
-	return spots
+	var query string
+	if(isCircle){
+		query = fmt.Sprintf(`SELECT *
+		FROM public."MY_TABLE"
+		WHERE ST_DWithin(coordinates::geography, ST_SetSRID(ST_MakePoint(%s, %s), 4326), %d)
+		ORDER BY
+		  CASE
+			WHEN ST_Distance(coordinates::geography, ST_SetSRID(ST_MakePoint(%s, %s), 4326)) < 50 THEN rating
+			ELSE NULL
+		  END,
+		  ST_Distance(coordinates::geography, ST_SetSRID(ST_MakePoint(%s,%s), 4326));
+		`,latitude,longitude,radius,latitude,longitude,latitude,longitude)
+		}else{
+		query = fmt.Sprintf(`SELECT * FROM public."MY_TABLE" LIMIT 10`)
+	}
+
+
+	err := models.DB.Limit(10).Raw(query).Scan(&spots).Error
+
+	fmt.Println(latitude , longitude , radius, isCircle)
+
+	if err != nil {
+		err := errors.New("Error retrieving data")
+		return spots, err
+	}
+
+
+	return spots, nil
 }

@@ -2,10 +2,13 @@ package models
 
 import (
 	"fmt"
+	"log"
 	"os"
+	"time"
 
 	"gorm.io/driver/postgres"
 	"gorm.io/gorm"
+	"gorm.io/gorm/logger"
 )
 
 var DB *gorm.DB
@@ -19,7 +22,19 @@ func ConnectDatabase() {
 		os.Getenv("DB_NAME"),
 		os.Getenv("DB_PORT"),
 	)
-	database, err := gorm.Open(postgres.Open(dsn), &gorm.Config{})
+
+	newLogger := logger.New(
+		log.New(os.Stdout, "\r\n", log.LstdFlags), // Output to console
+		logger.Config{
+			SlowThreshold: time.Second, // Customize the slow threshold if desired
+			LogLevel:      logger.Info, // Set log level as desired
+			Colorful:      true,        // Enable colored output (optional)
+		},
+	)
+
+	database, err := gorm.Open(postgres.Open(dsn), &gorm.Config{
+		Logger: newLogger,
+	})
 
 	if err != nil {
 		panic("Failed to connect to database")
