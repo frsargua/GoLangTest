@@ -5,7 +5,6 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
-	"regexp"
 	"strconv"
 
 	"github.com/frsargua/GoLangTest/models"
@@ -29,7 +28,7 @@ func GetSpots(w http.ResponseWriter, r *http.Request){
 		}
 
 			// Verify latitude and longitude format
-	if !isValidCoordinate(latitude) || !isValidCoordinate(longitude) {
+	if !isValidCoordinate(latitude) || ! isValidCoordinate(longitude) {
 		err := errors.New("Invalid latitude or longitude")
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
@@ -62,18 +61,9 @@ rad := float64(radius)
 	json.NewEncoder(w).Encode(rows)
   }
 
-  func isValidCoordinate(coordinate string) bool {
-	regex := `^[-+]?([1-8]?\d(\.\d+)?|90(\.0+)?)$`
-	match, _ := regexp.MatchString(regex, coordinate)
-	return match
-}
 
 func getSpotsInArea(latitude float64, longitude float64, radius float64, isCircle bool) ([]models.Spot, error) {
-	var spots []models.Spot
 	query := ""
-
-fmt.Println(isCircle)
-
 	if(isCircle){
 		query = fmt.Sprintf(`
 		SELECT *
@@ -108,9 +98,8 @@ fmt.Println(isCircle)
 	
 	}
 
-
-
-	err := models.DB.Limit(10).Raw(query).Scan(&spots).Error
+	var spots []models.Spot
+	err := models.DB.Raw(query).Scan(&spots).Error
 	
 	if err != nil {
 		err = errors.New("Error retrieving data")
