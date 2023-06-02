@@ -64,22 +64,36 @@ rad := float64(radius)
 
 func getSpotsInArea(latitude float64, longitude float64, radius float64, isCircle bool) ([]models.Spot, error) {
 	query := ""
+
+	newLatitude, newLongitude  := ConvertMetersToCoordinates(radius,latitude,longitude)
+	newLatitudeNeg, newLongitudeNeg  := ConvertMetersToCoordinates(-radius,latitude,longitude)
+
+
 	if(isCircle){
 		query = fmt.Sprintf(`
-		SELECT *
-		FROM public."MY_TABLE"
-		WHERE ST_DWithin(coordinates::geography, ST_SetSRID(ST_MakePoint(%f, %f), 4326), %f)
-		ORDER BY
-		  CASE
-			WHEN ST_Distance(coordinates::geography, ST_SetSRID(ST_MakePoint(%f, %f), 4326)) < 50 THEN rating
-			ELSE NULL
-		  END,
-		  ST_Distance(coordinates::geography, ST_SetSRID(ST_MakePoint(%f, %f), 4326));
-	`, latitude, longitude, radius, latitude, longitude, latitude, longitude)
+		  SELECT *
+		  FROM (
+			  SELECT 
+				  *, ST_X(ST_Transform(t1.coordinates, 4326)) AS longitude, ST_Y(ST_Transform(t1.coordinates, 4326)) AS latitude
+			  FROM public."MY_TABLE" AS t1
+		  ) AS TB 
+		  WHERE ST_DWithin(coordinates::geography, ST_SetSRID(ST_MakePoint(%f, %f), 4326), %f)
+		  ORDER BY
+			  CASE
+				  WHEN ST_Distance(coordinates::geography, ST_SetSRID(ST_MakePoint(TB.longitude, TB.latitude), 4326)) < 50 THEN rating
+				  ELSE NULL
+			  END,
+			  ST_Distance(coordinates::geography, ST_SetSRID(ST_MakePoint(%f, %f), 4326));
+		  
+	`, longitude,latitude, radius, longitude,latitude)
 		}else{
 			query = fmt.Sprintf(`
 			SELECT *
-			FROM public."MY_TABLE"
+			FROM (
+				SELECT 
+					*, ST_X(ST_Transform(t1.coordinates, 4326)) AS longitude, ST_Y(ST_Transform(t1.coordinates, 4326)) AS latitude
+				FROM public."MY_TABLE" AS t1
+			) AS TB 
 			WHERE ST_Intersects(
 				ST_MakeEnvelope(
 					%f, %f,
@@ -90,11 +104,11 @@ func getSpotsInArea(latitude float64, longitude float64, radius float64, isCircl
 			)
 			ORDER BY
 		  CASE
-			WHEN ST_Distance(coordinates::geography, ST_SetSRID(ST_MakePoint(%f, %f), 4326)) < 50 THEN rating
+			WHEN ST_Distance(coordinates::geography, ST_SetSRID(ST_MakePoint(TB.longitude, TB.latitude), 4326)) < 50 THEN rating
 			ELSE NULL
 		  END,
 		  ST_Distance(coordinates::geography, ST_SetSRID(ST_MakePoint(%f, %f), 4326));
-			`, latitude, longitude, latitude - radius, longitude - radius, latitude, longitude, latitude, longitude)
+			`, newLongitudeNeg, newLatitudeNeg, newLongitude, newLatitude, longitude,latitude)
 	
 	}
 
