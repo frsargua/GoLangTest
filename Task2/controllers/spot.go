@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"net/url"
 	"strconv"
 
 	"github.com/frsargua/GoLangTest/models"
@@ -14,55 +15,40 @@ import (
 func GetSpots(w http.ResponseWriter, r *http.Request){
 	w.Header().Set("Content-Type", "application/json")
 	queryParams := r.URL.Query()
-	latitude := queryParams.Get("latitude")
-	longitude := queryParams.Get("longitude") 
-	radiusStr := queryParams.Get("radius") 
-	isCircleStr := queryParams.Get("isCircle") 
+
+	
+	latitude, longitude, radius, isCircle, err := verifyAndParseParameters(queryParams)
+
+	spots, err := getSpotsAroundCoordinate(latitude, longitude, radius, isCircle)
 
 
-		// Check if any parameter is missing
-		if latitude == "" || longitude == "" || radiusStr == "" || isCircleStr == "" {
-			err := errors.New("One or more parameters are missing")
-			http.Error(w, err.Error(), http.StatusBadRequest)
-			return
-		}
-
-			// Verify latitude and longitude format
-	if !isValidCoordinate(latitude) || ! isValidCoordinate(longitude) {
-		err := errors.New("Invalid latitude or longitude")
-		http.Error(w, err.Error(), http.StatusBadRequest)
-		return
-	}
-	// Verify radius is an integer
-	radius, err := strconv.Atoi(radiusStr)
-	if err != nil {
-		err := errors.New("Invalid radius")
-		http.Error(w, err.Error(), http.StatusBadRequest)
-		return
-	}
-	// Verify isCircle is a boolean
-	isCircle, err := strconv.ParseBool(isCircleStr)
-	if err != nil {
-		err := errors.New("Invalid isCircle")
-		http.Error(w, err.Error(), http.StatusBadRequest)
-		return
-	}
-
-lat, nil := strconv.ParseFloat(latitude,64)
-lon, nil := strconv.ParseFloat(longitude,64)
-rad := float64(radius)
-	rows, err := getSpotsInArea(lat,lon,rad,isCircle);
-  
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
 
-	json.NewEncoder(w).Encode(rows)
+	json.NewEncoder(w).Encode(spots)
   }
 
+func getSpotsAroundCoordinate(latitude, longitude, radius float64, isCircle bool) ([]models.Spot, error) {
+	var spots []models.Spot
 
-func getSpotsInArea(latitude float64, longitude float64, radius float64, isCircle bool) ([]models.Spot, error) {
+	query,err := getQueryString(latitude, longitude, radius, isCircle)
+	if err != nil {
+		return spots, err
+	}
+
+	err2 := models.DB.Raw(query).Scan(&spots).Error
+
+	if err2 != nil {
+		return spots, errors.New("error retrieving data")
+	}
+
+
+	return spots, nil
+}
+
+func getQueryString(latitude, longitude, radius float64, isCircle bool) (string,error) {
 	query := ""
 
 	newLatitude, newLongitude  := ConvertMetersToCoordinates(radius,latitude,longitude)
@@ -71,56 +57,97 @@ func getSpotsInArea(latitude float64, longitude float64, radius float64, isCircl
 
 	if(isCircle){
 		query = fmt.Sprintf(`
-		  SELECT *
-		  FROM (
-			  SELECT 
-				  *, ST_X(ST_Transform(t1.coordinates, 4326)) AS longitude, ST_Y(ST_Transform(t1.coordinates, 4326)) AS latitude
-			  FROM public."MY_TABLE" AS t1
-		  ) AS TB 
+		WITH clusters AS (
+		  SELECT *, ST_ClusterDBSCAN(coordinates::geometry, eps := 0.00045, minpoints := 2) OVER () AS cluster_id
+		  FROM public."MY_TABLE"
 		  WHERE ST_DWithin(coordinates::geography, ST_SetSRID(ST_MakePoint(%f, %f), 4326), %f)
-		  ORDER BY
-			  CASE
-				  WHEN ST_Distance(coordinates::geography, ST_SetSRID(ST_MakePoint(TB.longitude, TB.latitude), 4326)) < 50 THEN rating
-				  ELSE NULL
-			  END,
-			  ST_Distance(coordinates::geography, ST_SetSRID(ST_MakePoint(%f, %f), 4326));
+		  ), 
+		  centroids AS (
+			SELECT cluster_id,
+				   ST_Centroid(ST_Collect(coordinates::geometry)) AS cluster_centroid
+			FROM clusters
+			WHERE cluster_id IS NOT NULL
+			GROUP BY cluster_id
+		)
+		SELECT clusters.id, clusters.name, clusters.website, clusters.coordinates, clusters.description, clusters.rating
+		FROM clusters
+		LEFT JOIN centroids 
+		ON clusters.cluster_id = centroids.cluster_id
+		ORDER BY 
+			CASE 
+				WHEN clusters.cluster_id IS NULL THEN ST_Distance(clusters.coordinates::geometry, ST_SetSRID(ST_MakePoint(%f, %f), 4326))
+				ELSE ST_Distance(centroids.cluster_centroid::geometry, ST_SetSRID(ST_MakePoint(%f, %f), 4326))
+			END,
+			rating
 		  
-	`, longitude,latitude, radius, longitude,latitude)
+	`, longitude,latitude, radius, longitude,latitude,longitude,latitude)
 		}else{
 			query = fmt.Sprintf(`
-			SELECT *
-			FROM (
-				SELECT 
-					*, ST_X(ST_Transform(t1.coordinates, 4326)) AS longitude, ST_Y(ST_Transform(t1.coordinates, 4326)) AS latitude
-				FROM public."MY_TABLE" AS t1
-			) AS TB 
-			WHERE ST_Intersects(
-				ST_MakeEnvelope(
-					%f, %f,
-					%f, %f,
-					4326
-				),
-				coordinates::geometry
+			WITH clusters AS (
+				SELECT *,
+					   ST_ClusterDBSCAN(coordinates::geometry, eps := 0.00045, minpoints := 2) OVER () AS cluster_id
+				FROM public."MY_TABLE"
+				WHERE ST_Intersects(
+					ST_MakeEnvelope(
+						%f, %f,
+						%f, %f,
+						4326
+					),
+					coordinates::geometry
+				)
+			), 
+			centroids AS (
+				SELECT cluster_id,
+					   ST_Centroid(ST_Collect(coordinates::geometry)) AS cluster_centroid
+				FROM clusters
+				WHERE cluster_id IS NOT NULL
+				GROUP BY cluster_id
 			)
-			ORDER BY
-		  CASE
-			WHEN ST_Distance(coordinates::geography, ST_SetSRID(ST_MakePoint(TB.longitude, TB.latitude), 4326)) < 50 THEN rating
-			ELSE NULL
-		  END,
-		  ST_Distance(coordinates::geography, ST_SetSRID(ST_MakePoint(%f, %f), 4326));
-			`, newLongitudeNeg, newLatitudeNeg, newLongitude, newLatitude, longitude,latitude)
+			SELECT clusters.id, clusters.name, clusters.website, clusters.coordinates, clusters.description, clusters.rating
+			FROM clusters
+			LEFT JOIN centroids 
+			ON clusters.cluster_id = centroids.cluster_id
+			ORDER BY 
+				CASE 
+					WHEN clusters.cluster_id IS NULL THEN ST_Distance(clusters.coordinates::geometry, ST_SetSRID(ST_MakePoint(%f, %f), 4326))
+					ELSE ST_Distance(centroids.cluster_centroid::geometry, ST_SetSRID(ST_MakePoint(%f, %f), 4326))
+				END,
+				rating
+			
+			`, newLongitudeNeg, newLatitudeNeg, newLongitude, newLatitude, longitude,latitude,longitude,latitude)
 	
 	}
 
-	var spots []models.Spot
-	err := models.DB.Raw(query).Scan(&spots).Error
-	
+	if query == "" {
+		return query, errors.New("error creating query string.")
+	}
+		return query, nil
+}
+
+func verifyAndParseParameters(queryParams url.Values) (float64, float64, float64, bool, error) {
+	latitudeStr, longitudeStr, radiusStr, isCircleStr :=
+		queryParams.Get("latitude"), queryParams.Get("longitude"), queryParams.Get("radius"), queryParams.Get("isCircle")
+
+	if latitudeStr == "" || longitudeStr == "" || radiusStr == "" || isCircleStr == "" {
+		return 0, 0, 0, false, errors.New("one or more parameters are missing")
+	}
+
+	if !isValidCoordinate(latitudeStr) || !isValidCoordinate(longitudeStr) {
+		return 0, 0, 0, false, errors.New("invalid latitude or longitude")
+	}
+
+	radius, err := strconv.ParseFloat(radiusStr, 64)
 	if err != nil {
-		err = errors.New("Error retrieving data")
-		return spots, err
+		return 0, 0, 0, false, errors.New("invalid radius")
 	}
-	
 
+	isCircle, err := strconv.ParseBool(isCircleStr)
+	if err != nil {
+		return 0, 0, 0, false, errors.New("invalid isCircle")
+	}
 
-	return spots, nil
+	latitude, _ := strconv.ParseFloat(latitudeStr, 64)
+	longitude, _ := strconv.ParseFloat(longitudeStr, 64)
+
+	return latitude, longitude, radius, isCircle, nil
 }
